@@ -109,30 +109,40 @@ local function stat(node)
       .. datetime(node.last_modified)
 end
 
-local function read(path, height)
-  local p = io.open(path)
+local state = {
+  file = "",
+  preview = "",
+  start_from = 0,
+}
 
-  if p == nil then
-    return nil
+local function read(path, size)
+  if state.file ~= path then
+    state.start_from = 0
+    state.file = path
+    state.preview = ""
   end
-
-  local i = 0
-  local res = ""
-  for line in p:lines() do
-    if line:match("[^ -~\n\t]") then
+  if state.preview == "" then
+    local cmd = "TMUX_POPUP=1 FZF_PREVIEW_COLUMNS=" .. size.width-1 .." FZF_PREVIEW_LINES=" .. size.height-1 .. " fzf-preview " .. xplr.util.shell_escape(path)
+    local p = io.popen(cmd, "r")
+    if p then
+      state.preview = p:read("*a")
       p:close()
-      return
     end
-
-    res = res .. line .. "\n"
-    if i == height then
-      break
-    end
-    i = i + 1
   end
-  p:close()
-
-  return res
+  if state.start_from == 0 then
+    return state.preview
+  end
+  local lines = {}
+  for l in state.preview:gmatch("([^\n]*)\n") do
+    table.insert(lines, l)
+  end
+  if state.start_from > #lines - size.height + 2 then
+    state.start_from = #lines - size.height + 2
+  end
+  for _ = 1, state.start_from do
+    table.remove(lines, 1)
+  end
+  return table.concat(lines, "\n")
 end
 
 local function offset(listing, height)
@@ -161,6 +171,8 @@ local function list(parent, focused, explorer_config)
     if node.is_dir then
       rel = rel .. "/"
     end
+    local style = xplr.util.lscolor(node.absolute_path)
+    rel = xplr.util.paint(rel, style)
     table.insert(files, rel)
   end
 
@@ -170,14 +182,14 @@ end
 local function tree_view(listing, height)
   local count = #listing.files
   local files, start = offset(listing, height)
-  local res = {}
+  local res = {"╭─ "}
   for i, file in ipairs(files) do
     local arrow, tree = " ", "├"
     if start + i == listing.focus then
-      arrow = "▸"
+      arrow = "⏵"
     end
     if start + i == count then
-      tree = "└"
+      tree = "╰"
     end
     table.insert(res, tree .. arrow .. file)
   end
@@ -200,7 +212,7 @@ local function render_right_pane(ctx)
 
   if n then
     if n.is_file then
-      local success, res = pcall(read, n.absolute_path, ctx.layout_size.height)
+      local success, res = pcall(read, n.absolute_path, ctx.layout_size)
       if success and res ~= nil then
         return res
       else
@@ -256,6 +268,22 @@ local function setup(args)
   xplr.fn.custom.tri_pane = {}
   xplr.fn.custom.tri_pane.render_left_pane = args.left_pane_renderer
   xplr.fn.custom.tri_pane.render_right_pane = args.right_pane_renderer
+  xplr.fn.custom.tri_pane.scroll_up = function()
+    state.start_from = state.start_from - 5
+    if state.start_from < 0 then
+      state.start_from = 0
+    end
+  end
+  xplr.fn.custom.tri_pane.scroll_down = function()
+    state.start_from = state.start_from + 5
+  end
+  xplr.fn.custom.tri_pane.scroll_to_end = function()
+    if state.start_from == 0 then
+      state.start_from = 9999999
+    else
+      state.start_from = 0
+    end
+  end
 
   local layout = {
     Horizontal = {
@@ -305,6 +333,18 @@ local function setup(args)
       },
     }
   end
+  xplr.config.modes.builtin.default.key_bindings.on_key["ctrl-u"] = {
+    help = "scroll up",
+    messages = { { CallLuaSilently = "custom.tri_pane.scroll_up" } },
+  }
+  xplr.config.modes.builtin.default.key_bindings.on_key["ctrl-d"] = {
+    help = "scroll down",
+    messages = { { CallLuaSilently = "custom.tri_pane.scroll_down" } },
+  }
+  xplr.config.modes.builtin.default.key_bindings.on_key["ctrl-g"] = {
+    help = "scroll to end",
+    messages = { { CallLuaSilently = "custom.tri_pane.scroll_to_end" } },
+  }
 end
 
 return { setup = setup }
