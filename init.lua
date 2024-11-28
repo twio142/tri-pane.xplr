@@ -95,54 +95,35 @@ local function stat(node)
     end
   end
 
-  return "Type     : "
-      .. type
-      .. "\nSize     : "
-      .. node.human_size
-      .. "\nOwner    : "
-      .. string.format("%s:%s", node.uid, node.gid)
-      .. "\nPerm     : "
-      .. permissions(node.permissions)
-      .. "\nCreated  : "
-      .. datetime(node.created)
-      .. "\nModified : "
-      .. datetime(node.last_modified)
+  return {
+    "Type     : " .. type,
+    "Size     : " .. node.human_size,
+    "Owner    : " .. string.format("%s:%s", node.uid, node.gid),
+    "Perm     : " .. permissions(node.permissions),
+    "Created  : " .. datetime(node.created),
+    "Modified : " .. datetime(node.last_modified)
+  }
 end
 
 local state = {
   file = "",
-  preview = "",
+  preview = {},
   start_from = 0,
 }
 
 local function read(path, size)
-  if state.file ~= path then
-    state.start_from = 0
-    state.file = path
-    state.preview = ""
-  end
-  if state.preview == "" then
-    local cmd = "TMUX_POPUP=1 FZF_PREVIEW_COLUMNS=" .. size.width-1 .." FZF_PREVIEW_LINES=" .. size.height-1 .. " fzf-preview " .. xplr.util.shell_escape(path)
-    local p = io.popen(cmd, "r")
-    if p then
-      state.preview = p:read("*a")
-      p:close()
-    end
-  end
-  if state.start_from == 0 then
-    return state.preview
+  local cmd = "TMUX_POPUP=1 FZF_PREVIEW_COLUMNS=" .. size.width-1 .." FZF_PREVIEW_LINES=" .. size.height-1 .. " fzf-preview " .. xplr.util.shell_escape(path)
+  local preview
+  local p = io.popen(cmd, "r")
+  if p then
+    preview = p:read("*a")
+    p:close()
   end
   local lines = {}
-  for l in state.preview:gmatch("([^\n]*)\n") do
+  for l in preview:gmatch("([^\n]*)\n") do
     table.insert(lines, l)
   end
-  if state.start_from > #lines - size.height + 2 then
-    state.start_from = #lines - size.height + 2
-  end
-  for _ = 1, state.start_from do
-    table.remove(lines, 1)
-  end
-  return table.concat(lines, "\n")
+  return lines
 end
 
 local function offset(listing, height)
@@ -157,8 +138,8 @@ end
 
 local function list(parent, focused, explorer_config)
   local files, focus = {}, 0
-  local config = { sorters = explorer_config.sorters }
-  local ok, nodes = pcall(xplr.util.explore, parent, config)
+  -- local config = { sorters = explorer_config.sorters }
+  local ok, nodes = pcall(xplr.util.explore, parent, explorer_config)
   if not ok then
     nodes = {}
   end
@@ -181,7 +162,11 @@ end
 
 local function tree_view(listing, height)
   local count = #listing.files
-  local files, start = offset(listing, height)
+  local files = xplr.util.clone(listing.files)
+  local start = 0
+  if height then
+    files, start = offset(listing, height)
+  end
   local res = {"╭─ "}
   for i, file in ipairs(files) do
     local arrow, tree = " ", "├"
@@ -211,22 +196,37 @@ local function render_right_pane(ctx)
   local n = ctx.app.focused_node
 
   if n then
-    if n.is_file then
-      local success, res = pcall(read, n.absolute_path, ctx.layout_size)
-      if success and res ~= nil then
-        return res
-      else
-        return stat(n)
-      end
-    elseif n.is_dir then
-      local listing = list(n.absolute_path, nil, ctx.app.explorer_config)
-      return table.concat(tree_view(listing, ctx.layout_size.height), "\n")
-    else
-      return stat(n)
+    if state.file ~= n.absolute_path then
+      state.start_from = 0
+      state.file = n.absolute_path
+      state.preview = {}
     end
-  else
-    return ""
+    if #state.preview == 0 then
+      if n.is_file or (n.is_symlink and n.symlink.is_file) then
+        local success, res = pcall(read, n.absolute_path, ctx.layout_size)
+        if success and res ~= nil then
+          state.preview = res
+        else
+          state.preview = stat(n)
+        end
+      elseif n.is_dir or (n.is_symlink and n.symlink.is_dir) then
+        local listing = list(n.absolute_path, nil, ctx.app.explorer_config)
+        state.preview = tree_view(listing)
+      else
+        state.preview = stat(n)
+      end
+    end
   end
+  if state.start_from == 0 then
+    return table.concat(state.preview, "\n")
+  elseif state.start_from > #state.preview - ctx.layout_size.height + 3 then
+    state.start_from = #state.preview - ctx.layout_size.height + 3
+  end
+  local lines = {}
+  for i = state.start_from, ctx.layout_size.height + state.start_from - 3 do
+    table.insert(lines, state.preview[i])
+  end
+  return table.concat(lines, "\n")
 end
 
 local left_pane = {
@@ -334,15 +334,15 @@ local function setup(args)
     }
   end
   xplr.config.modes.builtin.default.key_bindings.on_key["ctrl-u"] = {
-    help = "scroll up",
+    help = "scroll up preview",
     messages = { { CallLuaSilently = "custom.tri_pane.scroll_up" } },
   }
   xplr.config.modes.builtin.default.key_bindings.on_key["ctrl-d"] = {
-    help = "scroll down",
+    help = "scroll down preview",
     messages = { { CallLuaSilently = "custom.tri_pane.scroll_down" } },
   }
   xplr.config.modes.builtin.default.key_bindings.on_key["ctrl-g"] = {
-    help = "scroll to end",
+    help = "scroll preview to top / bottom",
     messages = { { CallLuaSilently = "custom.tri_pane.scroll_to_end" } },
   }
 end
