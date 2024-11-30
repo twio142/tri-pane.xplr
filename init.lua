@@ -266,6 +266,13 @@ local function setup(args)
   args.right_pane_renderer = args.right_pane_renderer or render_right_pane
 
   xplr.fn.custom.tri_pane = {}
+  xplr.fn.custom.tri_pane.toggle = function(ctx)
+    local on = xplr.util.to_json(ctx.layout):find("tri_pane") ~= nil
+    return {
+      "PopMode",
+      on and { SwitchLayoutBuiltin = "default" } or { SwitchLayoutCustom = "tri_pane" },
+    }
+  end
   xplr.fn.custom.tri_pane.render_left_pane = args.left_pane_renderer
   xplr.fn.custom.tri_pane.render_right_pane = args.right_pane_renderer
   xplr.fn.custom.tri_pane.scroll_up = function()
